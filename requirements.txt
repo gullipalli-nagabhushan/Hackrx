@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+pydantic
+openai
+pinecone
+asyncpg
+PyPDF2
+python-docx
+aiohttp
+langchain
+tiktoken
+python-multipart
+python-jose[cryptography]
+passlib[bcrypt]
+numpy
+psutil
