@@ -1,5 +1,6 @@
 # main.py - FastAPI Main Application
 from fastapi import FastAPI, HTTPException, Depends, Security
+from fastapi.concurrency import asynccontextmanager
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -20,10 +21,34 @@ from database import DatabaseManager
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup logic
+    """Initialize system components on startup"""
+    logger.info("Starting LLM-Powered Query-Retrieval System...")
+    await vector_store.initialize()
+    await query_engine.initialize()
+    await database_manager.initialize()
+    logger.info("System initialization completed")
+
+    yield  # app runs here
+
+    # Shutdown logic (optional)
+    logger.info("Shutting down LLM-Powered Query-Retrieval System...")
+    # await vector_store.shutdown()
+    # await query_engine.shutdown()
+    # await database_manager.shutdown()
+    # These methods can be implemented in future
+    logger.info("System shutdown completed")
+
+
+
 app = FastAPI(
     title="LLM-Powered Intelligent Query-Retrieval System",
     description="Advanced document processing and query system for insurance, legal, HR, and compliance domains",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # CORS middleware
@@ -58,14 +83,19 @@ vector_store = PineconeVectorStore()
 query_engine = QueryEngine()
 database_manager = DatabaseManager()
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize system components on startup"""
-    logger.info("Starting LLM-Powered Query-Retrieval System...")
-    await vector_store.initialize()
-    await query_engine.initialize()
-    await database_manager.initialize()
-    logger.info("System initialization completed")
+
+
+
+@app.get("/")
+async def root():
+    """Root endpoint with system information."""
+    return {
+        "message": "LLM Document Query Processing System",
+        "version": "1.0.0",
+        "status": "running",
+        "docs": "/docs"
+    }
+    
 
 @app.post("/api/v1/hackrx/run", response_model=QueryResponse)
 async def process_queries(
