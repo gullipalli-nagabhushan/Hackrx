@@ -83,7 +83,12 @@ async def process_queries(
         document_chunks = await document_processor.process_document(request.documents)
 
         # Step 2: Generate embeddings and store in vector database
-        await vector_store.add_documents(document_chunks)
+        try:
+            await vector_store.add_documents(document_chunks)
+            logger.info("Embeddings successfully stored in vector DB.")
+        except Exception as e:
+            logger.error(f"Failed to add documents to vector store: {str(e)}")
+            raise HTTPException(status_code=500, detail="Failed to store embeddings.")
 
         # Step 3: Process each query
         answers = []
