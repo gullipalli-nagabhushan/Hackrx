@@ -9,8 +9,7 @@ import asyncio
 import uvicorn
 from datetime import datetime
 import logging
-import os
-
+from config import settings
 # Import custom modules
 from document_processor import DocumentProcessor
 from query_engine import QueryEngine
@@ -62,8 +61,7 @@ app.add_middleware(
 
 # Security
 security = HTTPBearer()
-VALID_TOKEN = "6fb28b9fc3ce5773b0e195ad0784e3aee7d4de28b6391648242fa9932f2693d0"
-
+VALID_TOKEN = settings.AUTH_TOKEN  # Replace with your actual token
 def verify_token(credentials: HTTPAuthorizationCredentials = Security(security)):
     if credentials.credentials != VALID_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid authentication token")
@@ -108,19 +106,27 @@ async def process_queries(
     try:
         start_time = datetime.now()
 
-        # Step 1: Process and ingest document
-        logger.info(f"Processing document: {request.documents}")
-        document_chunks = await document_processor.process_document(request.documents)
+        # Step 0: Check if document already processed
+        already_exists = await database_manager.document_exists(request.documents)
+        if already_exists:
+            logger.info(f"Document {request.documents} already processed. Skipping ingestion.")
+        else:
+            # Step 1: Process and ingest document
+            logger.info(f"Processing document: {request.documents}")
+            document_chunks = await document_processor.process_document(request.documents)
 
-        # Step 2: Generate embeddings and store in vector database
-        try:
-            await vector_store.add_documents(document_chunks)
-            logger.info("Embeddings successfully stored in vector DB.")
-        except Exception as e:
-            logger.error(f"Failed to add documents to vector store: {str(e)}")
-            raise HTTPException(status_code=500, detail="Failed to store embeddings.")
+            # Step 2: Generate embeddings and store in vector database
+            try:
+                await vector_store.add_documents(document_chunks)
+                logger.info("Embeddings successfully stored in vector DB.")
+            except Exception as e:
+                logger.error(f"Failed to add documents to vector store: {str(e)}")
+                raise HTTPException(status_code=500, detail="Failed to store embeddings.")
 
-        # Step 3: Process each query
+            # Step 3: Store metadata in DB
+            await database_manager.insert_document(request.documents, document_chunks[0].metadata)
+
+        # Step 4: Process each query
         answers = []
 
         for question in request.questions:

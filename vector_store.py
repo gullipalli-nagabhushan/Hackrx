@@ -6,7 +6,6 @@ import pinecone
 from pinecone import Pinecone, ServerlessSpec
 import openai
 import numpy as np
-import os
 from concurrent.futures import ThreadPoolExecutor
 import uuid
 from config import settings
@@ -30,7 +29,7 @@ class PineconeVectorStore:
 
             # Initialize OpenAI for embeddings
             self.openai_client = openai.AsyncOpenAI(
-                api_key=os.getenv("OPENAI_API_KEY")
+                api_key=settings.OPENAI_API_KEY
             )
 
             # Create or connect to index
@@ -71,12 +70,13 @@ class PineconeVectorStore:
                     "id": vector_id,
                     "values": embedding,
                     "metadata": {
-                        "content": chunk.content,
-                        "source": chunk.metadata.get('source', ''),
-                        "page_number": chunk.metadata.get('page_number', 0),
-                        "chunk_id": chunk.metadata.get('chunk_id', ''),
-                        "document_type": chunk.metadata.get('document_type', ''),
-                        "token_count": chunk.metadata.get('token_count', 0)
+                        "source": chunk.metadata.get('source', 'unknown'),
+                        "chunk_id": chunk.metadata.get('chunk_id', str(uuid.uuid4())),
+                        "total_pages": chunk.metadata.get('total_pages', 0),
+                        "page_number": chunk.metadata.get('page_number', 1),
+                        "document_type": chunk.metadata.get('document_type', 'unknown'),
+                        "token_count": chunk.metadata.get('token_count', 0),
+                        "content": chunk.content  # Include actual text content
                     }
                 }
                 vectors.append(vector)
@@ -136,12 +136,8 @@ class PineconeVectorStore:
             for match in query_response.matches:
                 result = {
                     'content': match.metadata.get('content', ''),
-                    'metadata': {
-                        'chunk_id': match.metadata.get('chunk_id', ''),
-                        'source': match.metadata.get('source', ''),
-                        'page_number': match.metadata.get('page_number'),
-                        'document_type': match.metadata.get('document_type', ''),
-                        'token_count': match.metadata.get('token_count', 0)
+                    "metadata": {
+                        **match.metadata,
                     },
                     'similarity_score': match.score,
                     'vector_id': match.id

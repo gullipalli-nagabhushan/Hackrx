@@ -1,5 +1,6 @@
 # document_processor.py - Document Processing Module
 import asyncio
+import json
 import aiohttp
 import io
 from typing import List, Dict, Any
@@ -131,13 +132,20 @@ class DocumentProcessor:
             docs = self.text_splitter.create_documents([text])
 
             chunks = []
+            total_pages = metadata.get("total_pages", 0)
+            page_metadata = metadata.get("page_metadata", [])
+
+
             for i, doc in enumerate(docs):
+                token_count = len(self.tokenizer.encode(doc.page_content))
                 chunk_metadata = {
                     **metadata,
                     'chunk_id': f"chunk_{i}",
                     'source': source,
-                    'token_count': len(self.tokenizer.encode(doc.page_content))
+                    'token_count': token_count,
+                    'page_number': page_metadata[i]['page_number'] if i < len(page_metadata) else i + 1
                 }
+                
 
                 chunk = DocumentChunk(
                     content=doc.page_content,
@@ -149,3 +157,4 @@ class DocumentProcessor:
         except Exception as e:
             logger.error(f"Error creating chunks: {str(e)}")
             raise
+    
