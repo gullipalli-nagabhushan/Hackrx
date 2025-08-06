@@ -30,7 +30,8 @@ class DatabaseManager:
                 self.connection_string,
                 min_size=5,
                 max_size=20,
-                command_timeout=60
+                command_timeout=60,
+                statement_cache_size=0 
             )
 
             # Create tables
