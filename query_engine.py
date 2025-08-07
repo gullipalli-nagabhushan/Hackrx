@@ -39,7 +39,7 @@ class QueryEngine:
                 f"Content {i+1}: {chunk['content']}"
                 for i, chunk in enumerate(relevant_chunks)
             ])
-            # print(context)
+            print(context)
             # Create prompt for GPT-4
             prompt = f"""Based on the following document content and sample question and answer pairs, answer the question accurately with direct answers within 300 characters.
 
@@ -79,6 +79,8 @@ Sample Answer-10: Yes, for Plan A, the daily room rent is capped at 1% of the Su
 Question: {question}
 
 Instructions:
+- Answer in 1-3 sentences only
+- Do not explain unless explicitly asked
 - If the question is in sample questions, follow the format of the sample answers
 - Provide a direct, accurate answer based solely on the document content
 - If specific conditions, waiting periods, or limitations apply, include them
@@ -101,7 +103,7 @@ Answer:"""
                     }
                 ],
                 temperature=0.1,
-                max_tokens=500
+                max_tokens=200
             )
 
             answer = response.choices[0].message.content.strip()
