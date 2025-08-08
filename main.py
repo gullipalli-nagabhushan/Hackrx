@@ -138,7 +138,7 @@ async def process_queries(
             # Perform semantic search
             relevant_chunks = await vector_store.similarity_search(
                 query_embedding, 
-                top_k=5
+                top_k=10
             )
 
             # Generate answer using LLM

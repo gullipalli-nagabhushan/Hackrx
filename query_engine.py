@@ -39,7 +39,7 @@ class QueryEngine:
                 f"Content {i+1}: {chunk['content']}"
                 for i, chunk in enumerate(relevant_chunks)
             ])
-            print(context)
+            # print(context)
             # Create prompt for GPT-4
             prompt = f"""Based on the following document content and sample question and answer pairs, answer the question accurately with direct answers within 300 characters.
 
