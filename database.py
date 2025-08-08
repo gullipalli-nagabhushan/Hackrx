@@ -95,6 +95,3 @@ class DatabaseManager:
             logger.error(f"Error inserting document: {str(e)}")
 
 
-
-
-
