@@ -13,6 +13,7 @@
       "Are there any sub-limits on room rent and ICU charges for Plan A?"
   ]
 }
+
 {
   "answers": [
     "A grace period of fifteen days is provided for monthly premium payments, and thirty days for all other payment modes, to renew or continue the policy without losing continuity benefits. Coverage is not available during the grace period unless the premium is paid in installments.",
@@ -36,6 +37,7 @@
     "Is it compulsory to have a disc brake?"
   ]
 }
+
 {
   "answers": [
     "The ideal spark plug gap recommended is 0.8-0.9 mm.",
@@ -43,7 +45,6 @@
     "The document does not specify that having a disc brake is compulsory. It mentions both disc and drum brake variants, indicating that disc brakes are not mandatory."
   ]
 }
-
 
 
 {
@@ -56,6 +57,7 @@
       "I have raised a claim for hospitalization for Rs 200,000 with HDFC, and it's approved. My total expenses are Rs 250,000. Can I raise the remaining Rs 50,000 with you?"
   ]
 }
+
 {
   "answers": [
     "Your root canal claim will be settled within 15 days from the receipt of the last necessary document. If an investigation is required, the settlement will occur within 45 days.",
@@ -77,6 +79,7 @@
     "Is abortion covered?"
   ]
 }
+
 {
   "answers": [
     "Non-infective Arthritis is covered but may have a waiting period as specified in the policy.",
@@ -157,6 +160,7 @@
       "Do we know any other descent of Isaac Newton apart from his grandfather?"
   ]
 }
+
 {
   "answers": [
     "Newton defines 'quantity of motion' as the measure arising from the velocity and quantity of matter conjointly, while 'force' is described as a power of resisting, which every body uses to maintain its state of rest or uniform motion.",
