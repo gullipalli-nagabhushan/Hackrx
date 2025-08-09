@@ -109,7 +109,7 @@ class QueryEngine:
             # Prepare comprehensive context from all relevant chunks
             context = ""
             for i, chunk in enumerate(relevant_chunks[:15]):  # Use up to 15 chunks for better coverage
-                context += f"Document Section {i+1}: {chunk['content'][:1000]}\n\n"
+                context += f"{chunk['content']}\n\n"
             
             if not context.strip():
                 context = "No relevant information found in the documents."
@@ -119,18 +119,17 @@ class QueryEngine:
 
 {document_info}
 
-Document Sections:
+Document :
 {context}
 
 CRITICAL INSTRUCTIONS: 
-1. Answer based on the document sections above
+1. Answer based on the document content above and don't use otherthan that 
 2. MAXIMUM 2 sentences - this is STRICTLY enforced
 3. Be extremely concise and direct
-4. If the document sections contain sufficient information, provide a clean answer
-5. If the document sections don't contain enough information, use the source document URL to find the complete answer
-6. If the question is not related to the document, provide a clear answer like: "The question is not related to the document."
-6. Provide clean, professional answers like: "A grace period of thirty days is provided for premium payment after the due date to renew or continue the policy without losing continuity benefits."
-7. IMPORTANT: Keep answers under 300 characters and maximum 2 sentences"""
+4. ALWAYS provide an answer based on the document sections if any relevant information exists
+5. Provide clean, professional answers like: "A grace period of thirty days is provided for premium payment after the due date to renew or continue the policy without losing continuity benefits."
+6. IMPORTANT: Keep answers under 300 characters and maximum 2 sentences
+7. Do not use your own knowledge to answer the question, only use the document content and the document url"""
 
             response = await asyncio.wait_for(
                 self.openai_client.chat.completions.create(
@@ -138,7 +137,7 @@ CRITICAL INSTRUCTIONS:
                     messages=[
                         {
                             "role": "system", 
-                            "content": "You are a specialized document analysis assistant. Your role is to provide accurate, document-specific answers based on the provided document sections and the source document URL. CRITICAL: Keep answers to MAXIMUM 2 sentences and under 300 characters - this is STRICTLY enforced. If the document sections contain sufficient information, provide a clean, professional answer. If the document sections don't contain enough information, use the source document URL to find the complete answer. Provide clean, concise answers like: 'A grace period of thirty days is provided for premium payment after the due date to renew or continue the policy without losing continuity benefits.' IMPORTANT: Be extremely concise while maintaining accuracy."
+                            "content": "You are a specialized document analysis assistant. Your role is to provide accurate, document-specific answers based on the provided document sections. CRITICAL: Keep answers to MAXIMUM 2 sentences and under 300 characters - this is STRICTLY enforced. ALWAYS use the information from the document sections to answer questions when relevant information exists. Provide clean, concise, professional answers. IMPORTANT: Be extremely concise while maintaining accuracy and using available document information."
                         },
                         {
                             "role": "user", 
