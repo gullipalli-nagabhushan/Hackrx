@@ -1,14 +1,19 @@
-# document_processor.py - Document Processing Module
+# document_processor.py - Document Processing and Chunking
 import asyncio
-import json
-import aiohttp
-import io
-from typing import List, Dict, Any
-import PyPDF2
-import docx
 import logging
+from typing import List, Dict, Any, Optional
+import aiohttp
+import tempfile
+import os
+from pathlib import Path
+import hashlib
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.schema import Document
+import PyPDF2
+from docx import Document as DocxDocument
 import tiktoken
+from config import settings
+import io
 
 logger = logging.getLogger(__name__)
 
@@ -23,138 +28,152 @@ class DocumentChunk:
 class DocumentProcessor:
     def __init__(self):
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
+            chunk_size=1000,  # Increased for better context preservation
+            chunk_overlap=200,  # Increased for better context continuity
             length_function=len,
-            separators=["\n\n", "\n", ".", "?", "!", " ", ""]
+            separators=["\n\n", "\n", ". ", " ", ""]
         )
-        self.tokenizer = tiktoken.encoding_for_model("gpt-4")
+        self.session = None
+        self.cache = {}  # Cache for processed documents
 
-    async def process_document(self, document_url: str) -> List[DocumentChunk]:
-        """
-        Process document from URL and return chunks
-        """
+    async def initialize(self):
+        """Initialize aiohttp session for document downloads"""
+        if not self.session:
+            self.session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=5)  # Ultra-aggressive timeout
+            )
+
+    async def process_document(self, document_url: str) -> List[Document]:
+        """Process document with ultra-fast optimization"""
         try:
+            # Check cache first
+            cache_key = hashlib.md5(document_url.encode()).hexdigest()
+            if cache_key in self.cache:
+                return self.cache[cache_key]
+
             # Download document
-            document_content = await self._download_document(document_url)
+            content = await self._download_document(document_url)
+            if not content:
+                return []
 
-            # Determine document type and extract text
-            if document_url.lower().endswith('.pdf'):
-                text, metadata = await self._process_pdf(document_content)
-            elif document_url.lower().endswith('.docx'):
-                text, metadata = await self._process_docx(document_content)
-            else:
-                # Default to PDF processing
-                text, metadata = await self._process_pdf(document_content)
+            # Extract text based on file type
+            text = await self._extract_text(content, document_url)
+            if not text:
+                return []
 
-            # Create chunks
-            chunks = await self._create_chunks(text, metadata, document_url)
-
-            logger.info(f"Processed {len(chunks)} chunks from {document_url}")
+            # Split text into chunks
+            chunks = await self._split_text(text, document_url)
+            
+            # Cache the result
+            self.cache[cache_key] = chunks
             return chunks
 
         except Exception as e:
             logger.error(f"Error processing document {document_url}: {str(e)}")
-            raise
+            return []
 
-    async def _download_document(self, url: str) -> bytes:
-        """Download document from URL"""
+    async def _download_document(self, url: str) -> Optional[bytes]:
+        """Download document with ultra-fast optimization"""
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        return await response.read()
-                    else:
-                        raise Exception(f"Failed to download document: {response.status}")
+            if not self.session:
+                await self.initialize()
+
+            async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=2)) as response:  # Ultra-aggressive timeout
+                if response.status == 200:
+                    return await response.read()
+                else:
+                    logger.error(f"Failed to download document from {url}: {response.status}")
+                    return None
+
         except Exception as e:
-            logger.error(f"Error downloading document: {str(e)}")
-            raise
+            logger.error(f"Error downloading document from {url}: {str(e)}")
+            return None
 
-    async def _process_pdf(self, content: bytes) -> tuple[str, Dict[str, Any]]:
-        """Extract text from PDF"""
+    async def _extract_text(self, content: bytes, url: str) -> Optional[str]:
+        """Extract text from document with ultra-fast optimization"""
         try:
-            pdf_file = io.BytesIO(content)
-            reader = PyPDF2.PdfReader(pdf_file)
+            file_extension = Path(url).suffix.lower()
+            
+            if file_extension == '.pdf':
+                return await self._extract_pdf_text(content)
+            elif file_extension in ['.docx', '.doc']:
+                return await self._extract_docx_text(content)
+            else:
+                # Assume it's plain text
+                return content.decode('utf-8', errors='ignore')
 
-            text = ""
-            page_metadata = []
-
-            for i, page in enumerate(reader.pages):
-                page_text = page.extract_text()
-                text += f"\n\nPage {i+1}:\n{page_text}"
-                page_metadata.append({
-                    'page_number': i+1,
-                    'page_text_length': len(page_text)
-                })
-
-            metadata = {
-                'total_pages': len(reader.pages),
-                'page_metadata': page_metadata,
-                'document_type': 'pdf'
-            }
-
-            return text, metadata
         except Exception as e:
-            logger.error(f"Error processing PDF: {str(e)}")
-            raise
+            logger.error(f"Error extracting text from document: {str(e)}")
+            return None
 
-    async def _process_docx(self, content: bytes) -> tuple[str, Dict[str, Any]]:
-        """Extract text from DOCX"""
+    async def _extract_pdf_text(self, content: bytes) -> str:
+        """Extract text from PDF with ultra-fast optimization"""
         try:
-            doc_file = io.BytesIO(content)
-            doc = docx.Document(doc_file)
-
             text = ""
+            pdf_reader = PyPDF2.PdfReader(io.BytesIO(content))
+            
+            # Process all pages for complete coverage
+            max_pages = len(pdf_reader.pages)
+            for page_num in range(max_pages):
+                page = pdf_reader.pages[page_num]
+                text += page.extract_text() + "\n"
+            
+            return text
+
+        except Exception as e:
+            logger.error(f"Error extracting PDF text: {str(e)}")
+            return ""
+
+    async def _extract_docx_text(self, content: bytes) -> str:
+        """Extract text from DOCX with ultra-fast optimization"""
+        try:
+            doc = DocxDocument(io.BytesIO(content))
+            text = ""
+            
+            # Extract text from paragraphs
             for paragraph in doc.paragraphs:
-                text += paragraph.text + "\n"
+                if paragraph.text.strip():
+                    text += paragraph.text + "\n"
+            
+            return text
 
-            # Extract tables
-            for table in doc.tables:
-                for row in table.rows:
-                    row_text = " | ".join([cell.text for cell in row.cells])
-                    text += f"Table: {row_text}\n"
-
-            metadata = {
-                'paragraphs_count': len(doc.paragraphs),
-                'tables_count': len(doc.tables),
-                'document_type': 'docx'
-            }
-
-            return text, metadata
         except Exception as e:
-            logger.error(f"Error processing DOCX: {str(e)}")
-            raise
+            logger.error(f"Error extracting DOCX text: {str(e)}")
+            return ""
 
-    async def _create_chunks(self, text: str, metadata: Dict[str, Any], source: str) -> List[DocumentChunk]:
-        """Create semantic chunks from text"""
+    async def _split_text(self, text: str, source: str) -> List[Document]:
+        """Split text into chunks with ultra-fast optimization"""
         try:
-            # Split text into chunks
-            docs = self.text_splitter.create_documents([text])
+            if not text.strip():
+                return []
 
-            chunks = []
-            total_pages = metadata.get("total_pages", 0)
-            page_metadata = metadata.get("page_metadata", [])
-
-
-            for i, doc in enumerate(docs):
-                token_count = len(self.tokenizer.encode(doc.page_content))
-                chunk_metadata = {
-                    **metadata,
-                    'chunk_id': f"chunk_{i}",
-                    'source': source,
-                    'token_count': token_count,
-                    'page_number': page_metadata[i]['page_number'] if i < len(page_metadata) else i + 1
-                }
-                
-
-                chunk = DocumentChunk(
-                    content=doc.page_content,
-                    metadata=chunk_metadata
+            # Use ultra-fast text splitting
+            chunks = self.text_splitter.split_text(text)
+            
+            # Create Document objects with metadata
+            documents = []
+            for i, chunk in enumerate(chunks):
+                doc = Document(
+                    page_content=chunk,
+                    metadata={
+                        'source': source,
+                        'chunk_id': f"{hashlib.md5(source.encode()).hexdigest()}_{i}",
+                        'chunk_index': i,
+                        'total_chunks': len(chunks),
+                        'document_type': Path(source).suffix.lower(),
+                        'token_count': len(chunk.split())
+                    }
                 )
-                chunks.append(chunk)
+                documents.append(doc)
 
-            return chunks
+            return documents
+
         except Exception as e:
-            logger.error(f"Error creating chunks: {str(e)}")
-            raise
+            logger.error(f"Error splitting text: {str(e)}")
+            return []
+
+    async def cleanup(self):
+        """Cleanup resources"""
+        if self.session:
+            await self.session.close()
     

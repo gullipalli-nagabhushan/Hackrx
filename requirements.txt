@@ -14,3 +14,4 @@ python-jose[cryptography]
 passlib[bcrypt]
 numpy
 psutil
+python-dotenv

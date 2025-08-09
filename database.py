@@ -16,6 +16,10 @@ class DatabaseManager:
 
     def _build_connection_string(self) -> str:
         """Build PostgreSQL connection string from environment variables"""
+        if not all([settings.POSTGRES_USER, settings.POSTGRES_PASSWORD, settings.POSTGRES_HOST, settings.POSTGRES_PORT]):
+            logger.warning("Database credentials not fully configured. Database operations will be skipped.")
+            return ""
+        
         return f"postgresql://{settings.POSTGRES_USER}:" \
                f"{settings.POSTGRES_PASSWORD}@" \
                f"{settings.POSTGRES_HOST}:" \
@@ -25,6 +29,10 @@ class DatabaseManager:
     async def initialize(self):
         """Initialize database connection pool and create tables"""
         try:
+            if not self.connection_string:
+                logger.warning("Database connection string not available. Skipping database initialization.")
+                return
+
             # Create connection pool
             self.pool = await asyncpg.create_pool(
                 self.connection_string,
@@ -66,7 +74,12 @@ class DatabaseManager:
             logger.error(f"Error creating tables: {str(e)}")
 
     async def document_exists(self, source_url: str) -> bool:
+        """Check if document already exists in database"""
         try:
+            if not self.pool:
+                logger.warning("Database pool not available. Assuming document doesn't exist.")
+                return False
+                
             async with self.pool.acquire() as connection:
                 result = await connection.fetchval(
                     "SELECT 1 FROM documents WHERE source_url = $1 LIMIT 1;",
@@ -78,7 +91,12 @@ class DatabaseManager:
             return False
     
     async def insert_document(self, source_url: str, metadata: dict):
+        """Insert document metadata into database"""
         try:
+            if not self.pool:
+                logger.warning("Database pool not available. Skipping document insertion.")
+                return
+                
             async with self.pool.acquire() as connection:
                 await connection.execute(
                     """
@@ -91,6 +109,7 @@ class DatabaseManager:
                     metadata.get('total_pages', 0),
                     json.dumps(metadata)
                 )
+                logger.info(f"Document metadata inserted for {source_url}")
         except Exception as e:
             logger.error(f"Error inserting document: {str(e)}")
 
