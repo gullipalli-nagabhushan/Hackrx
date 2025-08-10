@@ -53,12 +53,9 @@ class QueryEngine:
                 raise ValueError("OpenAI API key not configured. Please set OPENAI_API_KEY environment variable to use this service.")
             
             # Generate embedding with reasonable timeout
-            response = await asyncio.wait_for(
-                self.openai_client.embeddings.create(
-                    model="text-embedding-ada-002",
-                    input=query.strip()
-                ),
-                timeout=10.0  # Increased timeout for reliability
+            response = await self.openai_client.embeddings.create(
+                model="text-embedding-ada-002",
+                input=query.strip()
             )
             embedding = response.data[0].embedding
             
@@ -111,6 +108,7 @@ class QueryEngine:
             for i, chunk in enumerate(relevant_chunks[:15]):  # Use up to 15 chunks for better coverage
                 context += f"{chunk['content']}\n\n"
             
+            print(context)
             if not context.strip():
                 context = "No relevant information found in the documents."
             # Enhanced prompt template with document URL for 100% accuracy and clean answers
@@ -131,24 +129,20 @@ CRITICAL INSTRUCTIONS:
 6. IMPORTANT: Keep answers under 300 characters and maximum 2 sentences
 7. Do not use your own knowledge to answer the question, only use the document content and the document url"""
 
-            response = await asyncio.wait_for(
-                self.openai_client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[
-                        {
-                            "role": "system", 
-                            "content": "You are a specialized document analysis assistant. Your role is to provide accurate, document-specific answers based on the provided document sections. CRITICAL: Keep answers to MAXIMUM 2 sentences and under 300 characters - this is STRICTLY enforced. ALWAYS use the information from the document sections to answer questions when relevant information exists. Provide clean, concise, professional answers. IMPORTANT: Be extremely concise while maintaining accuracy and using available document information."
-                        },
-                        {
-                            "role": "user", 
-                            "content": prompt
-                        }
-                    ],
-                    temperature=0.1,
-                    max_tokens=200,  # Increased for comprehensive document access
-                    timeout=15.0  # Increased timeout for reliability
-                ),
-                timeout=15.0
+            response = await self.openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {
+                        "role": "system", 
+                        "content": "You are a specialized document analysis assistant. Your role is to provide accurate, document-specific answers based on the provided document sections. CRITICAL: Keep answers to MAXIMUM 2 sentences and under 300 characters - this is STRICTLY enforced. ALWAYS use the information from the document sections to answer questions when relevant information exists. Provide clean, concise, professional answers. IMPORTANT: Be extremely concise while maintaining accuracy and using available document information."
+                    },
+                    {
+                        "role": "user", 
+                        "content": prompt
+                    }
+                ],
+                temperature=0.1,
+                max_tokens=200
             )
 
             answer = response.choices[0].message.content.strip()
@@ -200,3 +194,15 @@ CRITICAL INSTRUCTIONS:
         except Exception as e:
             logger.error(f"❌ Batch answer generation failed: {str(e)}")
             raise
+
+    async def clear_cache(self):
+        """Clear all internal caches for embeddings and answers"""
+        try:
+            self.embedding_cache.clear()
+            self.answer_cache.clear()
+            self.fast_cache.clear()
+            self.instant_cache.clear()
+            self.response_cache.clear()
+            logger.info("Query engine caches cleared")
+        except Exception as e:
+            logger.error(f"Error clearing query engine caches: {str(e)}")

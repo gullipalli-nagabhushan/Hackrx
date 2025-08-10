@@ -22,6 +22,7 @@ class PineconeVectorStore:
         self.dimension = 1536  # OpenAI text-embedding-ada-002 dimension
         self.executor = ThreadPoolExecutor(max_workers=16)  # Increased workers for instant speed
         self.openai_client = None
+        self.session = None  # Ensure attribute exists for cleanup
         
         # Intelligent caching system to prevent stale results and question mixing
         self.embedding_cache = {}  # Cache for embeddings with TTL
@@ -93,24 +94,47 @@ class PineconeVectorStore:
                 logger.warning("No chunks provided to add to vector store")
                 return
 
-            # Prepare texts for embedding
-            texts = [chunk.content for chunk in chunks]
+            # Normalize chunks to support both LangChain Document (page_content) and custom chunk (content)
+            normalized_chunks: List[Dict[str, Any]] = []
+            for chunk in chunks:
+                text = getattr(chunk, "content", None)
+                if text is None:
+                    text = getattr(chunk, "page_content", None)
+                metadata = getattr(chunk, "metadata", {}) or {}
+                if text is None:
+                    logger.warning("Skipping chunk with no text content")
+                    continue
+                if not isinstance(metadata, dict):
+                    try:
+                        metadata = dict(metadata)
+                    except Exception:
+                        metadata = {}
+                normalized_chunks.append({"text": text, "metadata": metadata})
+
+            if not normalized_chunks:
+                logger.warning("No valid chunks with text content to index")
+                return
+
+            # Prepare texts for embedding in original order
+            texts = [c["text"] for c in normalized_chunks]
 
             # Generate embeddings using OpenAI with intelligent caching
             embeddings = await self._generate_embeddings_batch(texts)
 
             # Prepare vectors for upsert
             vectors = []
-            for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-                vector_id = f"{chunk.metadata.get('source', 'unknown')}_{chunk.metadata.get('chunk_id', str(uuid.uuid4()))}"
+            for normalized, embedding in zip(normalized_chunks, embeddings):
+                source_value = normalized["metadata"].get("source", "unknown")
+                chunk_id_value = normalized["metadata"].get("chunk_id", str(uuid.uuid4()))
+                vector_id = f"{source_value}_{chunk_id_value}"
                 
                 vector = {
                     "id": vector_id,
                     "values": embedding,
                     "metadata": {
-                        "content": chunk.content,
-                        "source": chunk.metadata.get('source', 'unknown'),
-                        "chunk_id": chunk.metadata.get('chunk_id', str(uuid.uuid4())),
+                        "content": normalized["text"],
+                        "source": source_value,
+                        "chunk_id": chunk_id_value,
                         "created_at": time.time()
                     }
                 }
@@ -318,22 +342,60 @@ class PineconeVectorStore:
                 logger.error("Pinecone API key not configured. Cannot perform similarity search without API access.")
                 return []
 
+            # Ensure index is initialized
+            if self.index is None:
+                logger.error("Pinecone index not initialized. Initialize vector store before searching.")
+                return []
+
             # Enhanced search: Get more results initially for better selection
             enhanced_top_k = min(top_k * 2, 20)  # Get more results for better selection
             
-            # Query Pinecone index with enhanced parameters
-            query_response = await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(
-                    self.executor,
-                    lambda: self.index.query(
-                        vector=query_embedding,
-                        top_k=enhanced_top_k,
-                        include_metadata=True,
-                        include_values=False
+            # Build optional metadata filter to restrict results to the requested document only
+            pinecone_filter = None
+            if document_url:
+                pinecone_filter = {"source": document_url}
+
+            # Query Pinecone index with enhanced parameters and retries to mitigate transient timeouts
+            attempt = 0
+            query_response = None
+            max_attempts = 3
+            current_top_k = enhanced_top_k
+            timeouts = [15.0, 25.0, 35.0]
+            while attempt < max_attempts:
+                try:
+                    query_response = await asyncio.wait_for(
+                        asyncio.get_event_loop().run_in_executor(
+                            self.executor,
+                            lambda: self.index.query(
+                                vector=query_embedding,
+                                top_k=current_top_k,
+                                include_metadata=True,
+                                include_values=False,
+                                filter=pinecone_filter
+                            )
+                        ),
+                        timeout=None  # No timeout for large indexes
                     )
-                ),
-                timeout=15.0  # Increased timeout for enhanced search
-            )
+                    break
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"Similarity search attempt {attempt+1} timed out at {timeouts[min(attempt, len(timeouts)-1)]}s; "
+                        f"retrying with adjusted parameters"
+                    )
+                    # Reduce load for next attempt
+                    attempt += 1
+                    if attempt == 1:
+                        current_top_k = top_k
+                    elif attempt >= 2:
+                        current_top_k = max(5, min(top_k, 5))
+                except Exception as inner_e:
+                    # For non-timeout errors, log and break to outer handler
+                    logger.error(f"Pinecone query failed on attempt {attempt+1}: {str(inner_e) or repr(inner_e)}")
+                    raise
+
+            if query_response is None:
+                logger.error("Intelligent similarity search timed out after multiple attempts")
+                return []
 
             # Format and enhance results with keyword relevance
             results = []
@@ -392,9 +454,40 @@ class PineconeVectorStore:
             
             return top_results
 
-        except Exception as e:
-            logger.error(f"Error in intelligent similarity search: {str(e)}")
+        except asyncio.TimeoutError:
+            logger.error("Error in intelligent similarity search: request timed out")
             return []
+        except Exception as e:
+            logger.error(f"Error in intelligent similarity search: {str(e) or repr(e)}")
+            return []
+
+    async def delete_vectors_by_source(self, document_url: str) -> None:
+        """Delete all vectors in the index that belong to a specific document URL."""
+        try:
+            if not self.index:
+                logger.warning("Pinecone index not available - skipping vector deletion")
+                return
+            await asyncio.get_event_loop().run_in_executor(
+                self.executor,
+                lambda: self.index.delete(filter={"source": document_url})
+            )
+            logger.info(f"Deleted vectors for document source: {document_url}")
+        except Exception as e:
+            logger.error(f"Error deleting vectors for source {document_url}: {str(e)}")
+
+    async def reset_index(self) -> None:
+        """Delete all vectors from the index for a clean start."""
+        try:
+            if not self.pc or not self.index:
+                logger.warning("Pinecone not initialized - skipping index reset")
+                return
+            await asyncio.get_event_loop().run_in_executor(
+                self.executor,
+                lambda: self.index.delete(delete_all=True)
+            )
+            logger.info("Pinecone index cleared (delete_all=True)")
+        except Exception as e:
+            logger.error(f"Error resetting Pinecone index: {str(e)}")
 
     async def clear_cache(self):
         """Clear all caches - useful for testing or when documents are updated"""

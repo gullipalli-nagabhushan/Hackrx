@@ -121,6 +121,18 @@ async def process_queries(
         # Log essential request information
         logger.info(f"📄 Processing request - Document: {request.documents}")
         logger.info(f"❓ Questions ({len(request.questions)}): {[q  for q in request.questions]}")
+
+        # Early validation: reject unsupported document types with classification
+        if not document_processor.is_supported_source(request.documents):
+            cls = document_processor.classify_source(request.documents)
+            ext = cls.get("extension") or ""
+            category = cls.get("category") or "unknown"
+            logger.warning(f"Unsupported document format for URL: {request.documents} (ext={ext}, category={category})")
+            msg = (
+                f"Invalid document format ({category or 'unknown'}{f' {ext}' if ext else ''}). "
+                "Supported: PDF, DOCX, TXT."
+            )
+            return QueryResponse(answers=[msg] * len(request.questions))
         
         # Instant cache check for entire request
         request_hash = hashlib.md5(f"{request.documents}_{str(request.questions)}".encode()).hexdigest()
@@ -143,11 +155,11 @@ async def process_queries(
         if already_exists:
             logger.info("📋 Document already processed - skipping ingestion")
         else:
-            logger.info("🔄 Document not found - starting async processing")
-            # Step 1: Process and ingest document (async, non-blocking)
-            asyncio.create_task(_process_document_async(request.documents))
+            logger.info("🔄 Document not found - processing document now (blocking)")
+            # Step 1: Process and ingest document synchronously before answering
+            await _process_document(request.documents)
 
-        # Step 2: Process all queries with instant optimization
+        # Step 2: Process all queries with instant optimization (after vectors are ready)
         answers = await _process_queries_instant(request.questions, request.documents)
 
         # Cache the entire response for instant future access
@@ -176,21 +188,28 @@ async def process_queries(
         else:
             raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-async def _process_document_async(document_url: str):
-    """Process document asynchronously without blocking the main response"""
+async def _process_document(document_url: str):
+    """Process document and upsert chunks before answering queries (synchronous path)."""
     try:
         logger.info(f"🔄 Processing document: {document_url}")
-        
+
         # Clear cache before processing new document to prevent stale results
         await vector_store.clear_cache()
         instant_cache.clear()
         logger.info(f"🧹 Cache cleared before processing new document")
-        
+
+        # Ensure no stale vectors exist for this document
+        await vector_store.delete_vectors_by_source(document_url)
+
         document_chunks = await document_processor.process_document(document_url)
-        await vector_store.add_documents(document_chunks)
-        asyncio.create_task(
-            database_manager.insert_document(document_url, document_chunks[0].metadata if document_chunks else {})
-        )
+        if not document_chunks:
+            logger.warning("No chunks extracted from document; skipping vector upsert and DB insert")
+        else:
+            await vector_store.add_documents(document_chunks)
+            # Insert document metadata in background (only when chunks exist)
+            asyncio.create_task(
+                database_manager.insert_document(document_url, document_chunks[0].metadata)
+            )
         logger.info(f"✅ Document processed successfully: {len(document_chunks)} chunks")
     except Exception as e:
         logger.error(f"❌ Document processing failed: {str(e)}")
@@ -304,10 +323,19 @@ async def health_check():
 async def clear_cache(token: str = Depends(verify_token)):
     """Clear all caches to prevent stale results"""
     try:
+        # Clear caches across all subsystems
         await vector_store.clear_cache()
-        # Also clear the instant cache in main.py
+        await query_engine.clear_cache()
+        # Clear global caches in main
+        embedding_cache.clear()
+        result_cache.clear()
+        ultra_fast_cache.clear()
         instant_cache.clear()
-        return {"message": "All caches cleared successfully", "timestamp": datetime.now().isoformat()}
+        response_cache.clear()
+        return {
+            "message": "All caches cleared successfully",
+            "timestamp": datetime.now().isoformat()
+        }
     except Exception as e:
         logger.error(f"Error clearing cache: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to clear cache: {str(e)}")
@@ -325,6 +353,44 @@ async def get_cache_stats(token: str = Depends(verify_token)):
     except Exception as e:
         logger.error(f"Error getting cache stats: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get cache stats: {str(e)}")
+
+@app.post("/api/v1/hackrx/reset-all")
+async def reset_all(token: str = Depends(verify_token)):
+    """Completely reset system state: clear caches, wipe vectors, and reset DB."""
+    try:
+        await vector_store.clear_cache()
+        await query_engine.clear_cache()
+        embedding_cache.clear()
+        result_cache.clear()
+        ultra_fast_cache.clear()
+        instant_cache.clear()
+        response_cache.clear()
+
+        # Reset Pinecone index and database
+        await vector_store.reset_index()
+        await database_manager.reset_database()
+
+        return {
+            "message": "System reset complete: caches cleared, vectors wiped, database reset",
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error during system reset: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to reset system: {str(e)}")
+
+class DeleteRequest(BaseModel):
+    document_url: str
+
+@app.post("/api/v1/hackrx/delete-document")
+async def delete_document(req: DeleteRequest, token: str = Depends(verify_token)):
+    """Delete a processed document: remove vectors and DB metadata."""
+    try:
+        await vector_store.delete_vectors_by_source(req.document_url)
+        await database_manager.delete_document(req.document_url)
+        return {"message": "Document deleted", "document_url": req.document_url}
+    except Exception as e:
+        logger.error(f"Error deleting document {req.document_url}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

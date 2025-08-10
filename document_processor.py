@@ -2,6 +2,7 @@
 import asyncio
 import logging
 from typing import List, Dict, Any, Optional
+from urllib.parse import urlparse
 import aiohttp
 import tempfile
 import os
@@ -14,6 +15,11 @@ from docx import Document as DocxDocument
 import tiktoken
 from config import settings
 import io
+import zipfile
+import re
+import xml.etree.ElementTree as ET
+import base64
+import openai
 
 logger = logging.getLogger(__name__)
 
@@ -35,17 +41,35 @@ class DocumentProcessor:
         )
         self.session = None
         self.cache = {}  # Cache for processed documents
+        self.supported_extensions = {".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp"}
+        # Classification sets for unsupported formats
+        self.image_extensions = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp", ".svg"}
+        self.archive_extensions = {".zip", ".tar", ".gz", ".tgz", ".rar", ".7z", ".xz", ".bz2"}
+        self.binary_extensions = {".bin", ".exe", ".dll", ".so", ".dylib", ".pkg", ".deb", ".rpm"}
+        self.openai_client = None
 
     async def initialize(self):
         """Initialize aiohttp session for document downloads"""
         if not self.session:
+            # Unlimited timeout to support very large documents
             self.session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=5)  # Ultra-aggressive timeout
+                timeout=aiohttp.ClientTimeout(total=None)
             )
+        # Initialize OpenAI client for OCR if available
+        if self.openai_client is None and settings.OPENAI_API_KEY and settings.OPENAI_API_KEY != "your_openai_api_key_here":
+            try:
+                self.openai_client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            except Exception:
+                self.openai_client = None
 
     async def process_document(self, document_url: str) -> List[Document]:
         """Process document with ultra-fast optimization"""
         try:
+            # Validate supported document type early
+            ext = self._extract_extension_from_source(document_url)
+            if ext not in self.supported_extensions:
+                logger.warning(f"Unsupported document format '{ext}' for URL: {document_url}")
+                return []
             # Check cache first
             cache_key = hashlib.md5(document_url.encode()).hexdigest()
             if cache_key in self.cache:
@@ -78,11 +102,21 @@ class DocumentProcessor:
             if not self.session:
                 await self.initialize()
 
-            async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=2)) as response:  # Ultra-aggressive timeout
+            headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; HackrxDocFetcher/1.0)",
+                "Accept": "*/*"
+            }
+            async with self.session.get(
+                url,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=None)
+            ) as response:
                 if response.status == 200:
                     return await response.read()
                 else:
-                    logger.error(f"Failed to download document from {url}: {response.status}")
+                    logger.error(
+                        f"Failed to download document from {url}: HTTP {response.status}"
+                    )
                     return None
 
         except Exception as e:
@@ -92,12 +126,22 @@ class DocumentProcessor:
     async def _extract_text(self, content: bytes, url: str) -> Optional[str]:
         """Extract text from document with ultra-fast optimization"""
         try:
-            file_extension = Path(url).suffix.lower()
+            # Determine extension robustly (handles URLs with query params)
+            file_extension = self._extract_extension_from_source(url)
             
             if file_extension == '.pdf':
                 return await self._extract_pdf_text(content)
             elif file_extension in ['.docx', '.doc']:
-                return await self._extract_docx_text(content)
+                # Primary extraction via python-docx
+                text = await self._extract_docx_text(content)
+                # Fallback to XML unzip if empty or very short
+                if not text or len(text.strip()) < 10:
+                    fallback_text = self._extract_docx_text_fallback(content)
+                    return fallback_text
+                return text
+            elif file_extension in self.image_extensions:
+                # OCR via OpenAI Vision (gpt-4o)
+                return await self._extract_image_text_openai(content)
             else:
                 # Assume it's plain text
                 return content.decode('utf-8', errors='ignore')
@@ -141,6 +185,115 @@ class DocumentProcessor:
             logger.error(f"Error extracting DOCX text: {str(e)}")
             return ""
 
+    def _extract_docx_text_fallback(self, content: bytes) -> str:
+        """Fallback DOCX extraction by parsing word/document.xml and concatenating w:t elements."""
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                if 'word/document.xml' not in zf.namelist():
+                    return ""
+                with zf.open('word/document.xml') as f:
+                    xml_text = f.read().decode('utf-8', errors='ignore')
+                    # Parse XML and extract all text nodes
+                    try:
+                        # Register namespaces if present
+                        # Extract text from all w:t tags, inserting newlines for paragraphs
+                        root = ET.fromstring(xml_text)
+                        namespaces = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+                        texts: List[str] = []
+                        for para in root.findall('.//w:p', namespaces):
+                            parts: List[str] = []
+                            for node in para.findall('.//w:t', namespaces):
+                                if node.text:
+                                    parts.append(node.text)
+                            if parts:
+                                texts.append(' '.join(parts).strip())
+                        plain_text = '\n'.join(texts)
+                        # Normalize whitespace
+                        plain_text = re.sub(r"\s+", " ", plain_text)
+                        plain_text = re.sub(r"\s*\n\s*", "\n", plain_text).strip()
+                        return plain_text
+                    except Exception:
+                        # As last resort, strip tags
+                        stripped = re.sub(r'<[^>]+>', ' ', xml_text)
+                        stripped = re.sub(r"\s+", " ", stripped).strip()
+                        return stripped
+        except Exception as e:
+            logger.error(f"Error in DOCX fallback extraction: {str(e)}")
+            return ""
+
+    async def _extract_image_text_openai(self, content: bytes) -> str:
+        """Use OpenAI vision to extract raw text from image bytes."""
+        try:
+            if not self.openai_client:
+                logger.warning("OpenAI client not available for OCR - returning empty text")
+                return ""
+            # Encode image as base64 data URL
+            b64 = base64.b64encode(content).decode('utf-8')
+            data_url = f"data:image/png;base64,{b64}"
+            response = await self.openai_client.chat.completions.create(
+                model=settings.OPENAI_MODEL,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Extract only the raw text from this image in natural reading order. No commentary."},
+                            {"type": "image_url", "image_url": {"url": data_url}}
+                        ]
+                    }
+                ],
+                temperature=0.0,
+                max_tokens=2000
+            )
+            text = response.choices[0].message.content or ""
+            return text.strip()
+        except Exception as e:
+            logger.error(f"Error during image OCR with OpenAI: {str(e)}")
+            return ""
+
+    def _extract_extension_from_source(self, source: str) -> str:
+        """Extract a safe file extension from a URL or file path, ignoring query params."""
+        try:
+            parsed = urlparse(source)
+            path = parsed.path if parsed.scheme else source
+            ext = Path(path).suffix.lower()
+            # Normalize to common known types; keep it short and safe
+            if ext and len(ext) <= 10:
+                return ext
+            # Fallback: best-effort guess
+            for candidate in [".pdf", ".docx", ".doc", ".txt", ".zip"]:
+                if candidate in path.lower():
+                    return candidate
+            return ""
+        except Exception:
+            return ""
+
+    def is_supported_source(self, source: str) -> bool:
+        """Check if the source URL/path has a supported extension."""
+        ext = self._extract_extension_from_source(source)
+        return ext in self.supported_extensions
+
+    def classify_source(self, source: str) -> Dict[str, str]:
+        """Classify the source by extension into a human-friendly category.
+
+        Returns: { 'extension': str, 'category': str }
+        Categories: pdf, docx, text, image, archive, binary, unknown
+        """
+        ext = self._extract_extension_from_source(source)
+        ext_lower = ext.lower() if ext else ""
+        if ext_lower in {".pdf"}:
+            return {"extension": ext_lower, "category": "pdf"}
+        if ext_lower in {".docx"}:
+            return {"extension": ext_lower, "category": "docx"}
+        if ext_lower in {".txt"}:
+            return {"extension": ext_lower, "category": "text"}
+        if ext_lower in self.image_extensions:
+            return {"extension": ext_lower, "category": "image"}
+        if ext_lower in self.archive_extensions:
+            return {"extension": ext_lower, "category": "archive"}
+        if ext_lower in self.binary_extensions:
+            return {"extension": ext_lower, "category": "binary"}
+        return {"extension": ext_lower or "", "category": "unknown"}
+
     async def _split_text(self, text: str, source: str) -> List[Document]:
         """Split text into chunks with ultra-fast optimization"""
         try:
@@ -152,6 +305,7 @@ class DocumentProcessor:
             
             # Create Document objects with metadata
             documents = []
+            safe_ext = self._extract_extension_from_source(source)
             for i, chunk in enumerate(chunks):
                 doc = Document(
                     page_content=chunk,
@@ -160,7 +314,7 @@ class DocumentProcessor:
                         'chunk_id': f"{hashlib.md5(source.encode()).hexdigest()}_{i}",
                         'chunk_index': i,
                         'total_chunks': len(chunks),
-                        'document_type': Path(source).suffix.lower(),
+                        'document_type': safe_ext,
                         'token_count': len(chunk.split())
                     }
                 )
