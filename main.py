@@ -21,6 +21,7 @@ from query_engine import QueryEngine
 from vector_store import PineconeVectorStore
 from database import DatabaseManager
 from performance_monitor import performance_monitor, monitor_performance
+from groq_status_monitor import get_groq_status
 import hashlib
 
 # Get logger for this module
@@ -166,13 +167,19 @@ async def process_queries(
         processing_time = (time.time() - start_time) * 1000
         logger.error(f"❌ Request failed after {processing_time:.2f}ms - Error: {str(e)}")
         
-        # Provide more specific error messages
-        if "timeout" in str(e).lower():
+        # Provide more specific error messages based on error type
+        error_str = str(e).lower()
+        
+        if "503" in error_str or "service unavailable" in error_str:
+            raise HTTPException(status_code=503, detail="Groq service is temporarily unavailable. Please try again in a few minutes. Visit https://groqstatus.com/ for service status.")
+        elif "timeout" in error_str:
             raise HTTPException(status_code=408, detail="Request timed out. Please try again.")
-        elif "rate limit" in str(e).lower():
+        elif "rate limit" in error_str or "429" in error_str:
             raise HTTPException(status_code=429, detail="Service is busy. Please wait a moment and try again.")
-        elif "authentication" in str(e).lower() or "api key" in str(e).lower():
+        elif "authentication" in error_str or "api key" in error_str:
             raise HTTPException(status_code=401, detail="Authentication error. Please check API configuration.")
+        elif "quota" in error_str or "billing" in error_str:
+            raise HTTPException(status_code=402, detail="API quota exceeded. Please check your Groq account billing status.")
         else:
             raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
@@ -232,13 +239,19 @@ async def _process_queries_instant(questions: List[str], document_url: str) -> L
 
     except Exception as e:
         logger.error(f"❌ Query processing failed: {str(e)}")
-        # Provide more specific error messages
-        if "timeout" in str(e).lower():
+        # Provide more specific error messages based on error type
+        error_str = str(e).lower()
+        
+        if "503" in error_str or "service unavailable" in error_str:
+            return ["Groq service is temporarily unavailable. Please try again in a few minutes. Visit https://groqstatus.com/ for service status."] * len(questions)
+        elif "timeout" in error_str:
             return ["Request timed out. Please try again with simpler questions."] * len(questions)
-        elif "rate limit" in str(e).lower():
+        elif "rate limit" in error_str or "429" in error_str:
             return ["Service is busy. Please wait a moment and try again."] * len(questions)
-        elif "authentication" in str(e).lower() or "api key" in str(e).lower():
+        elif "authentication" in error_str or "api key" in error_str:
             return ["Authentication error. Please check API configuration."] * len(questions)
+        elif "quota" in error_str or "billing" in error_str:
+            return ["API quota exceeded. Please check your Groq account billing status."] * len(questions)
         else:
             return [f"Error processing questions: {str(e)[:100]}..."] * len(questions)
 
@@ -274,13 +287,19 @@ async def _generate_answer_instant(question: str, document_url: str) -> str:
     except Exception as e:
         logger.error(f"❌ Answer generation failed for question '{question}...': {str(e)}")
         
-        # Provide more specific error messages
-        if "timeout" in str(e).lower():
+        # Provide more specific error messages based on error type
+        error_str = str(e).lower()
+        
+        if "503" in error_str or "service unavailable" in error_str:
+            return "Groq service is temporarily unavailable. Please try again in a few minutes. Visit https://groqstatus.com/ for service status."
+        elif "timeout" in error_str:
             return "Request timed out. Please try again with a simpler question."
-        elif "rate limit" in str(e).lower():
+        elif "rate limit" in error_str or "429" in error_str:
             return "Service is busy. Please wait a moment and try again."
-        elif "authentication" in str(e).lower() or "api key" in str(e).lower():
+        elif "authentication" in error_str or "api key" in error_str:
             return "Authentication error. Please check API configuration."
+        elif "quota" in error_str or "billing" in error_str:
+            return "API quota exceeded. Please check your Groq account billing status."
         else:
             return f"Error processing question: {str(e)[:100]}..."
 
@@ -325,6 +344,21 @@ async def get_cache_stats(token: str = Depends(verify_token)):
     except Exception as e:
         logger.error(f"Error getting cache stats: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get cache stats: {str(e)}")
+
+@app.get("/api/v1/hackrx/groq-status")
+async def get_groq_service_status(token: str = Depends(verify_token)):
+    """Get Groq service status and health information"""
+    try:
+        status_info = await get_groq_status()
+        return {
+            "service": "Groq",
+            "status": status_info,
+            "timestamp": datetime.now().isoformat(),
+            "recommendation": status_info.get("recommendation", "Unknown")
+        }
+    except Exception as e:
+        logger.error(f"Error getting Groq status: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get Groq status: {str(e)}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
