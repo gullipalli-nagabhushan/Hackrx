@@ -41,7 +41,7 @@ class DocumentProcessor:
         )
         self.session = None
         self.cache = {}  # Cache for processed documents
-        self.supported_extensions = {".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp"}
+        self.supported_extensions = {".pdf", ".docx", ".txt", ".xlsx", ".pptx", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp"}
         # Classification sets for unsupported formats
         self.image_extensions = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp", ".svg"}
         self.archive_extensions = {".zip", ".tar", ".gz", ".tgz", ".rar", ".7z", ".xz", ".bz2"}
@@ -139,6 +139,10 @@ class DocumentProcessor:
                     fallback_text = self._extract_docx_text_fallback(content)
                     return fallback_text
                 return text
+            elif file_extension == '.xlsx':
+                return await self._extract_xlsx_text(content)
+            elif file_extension in ['.pptx', '.ppt']:
+                return await self._extract_pptx_text(content)
             elif file_extension in self.image_extensions:
                 # OCR via OpenAI Vision (gpt-4o)
                 return await self._extract_image_text_openai(content)
@@ -250,6 +254,82 @@ class DocumentProcessor:
             logger.error(f"Error during image OCR with OpenAI: {str(e)}")
             return ""
 
+    async def _extract_xlsx_text(self, content: bytes) -> str:
+        """Extract text from XLSX spreadsheets by reading all sheets and rows."""
+        try:
+            # Lazy import to avoid hard dependency if not installed
+            import openpyxl  # type: ignore
+        except Exception as e:
+            logger.error(f"openpyxl not available for XLSX parsing: {str(e)}")
+            return ""
+
+        try:
+            workbook = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
+            parts: List[str] = []
+            for sheet in workbook.worksheets:
+                parts.append(f"Sheet: {sheet.title}")
+                for row in sheet.iter_rows(values_only=True):
+                    # Convert row to string, skipping completely empty rows
+                    values = [str(cell) if cell is not None else "" for cell in row]
+                    if any(v.strip() for v in values):
+                        parts.append(" | ".join(values))
+                parts.append("")
+            text = "\n".join(parts)
+            return text
+        except Exception as e:
+            logger.error(f"Error extracting XLSX text: {str(e)}")
+            return ""
+
+    async def _extract_pptx_text(self, content: bytes) -> str:
+        """Extract text from PPTX slides including shapes, tables, and notes."""
+        try:
+            # Lazy import to avoid hard dependency if not installed
+            from pptx import Presentation  # type: ignore
+        except Exception as e:
+            logger.error(f"python-pptx not available for PPTX parsing: {str(e)}")
+            return ""
+
+        try:
+            prs = Presentation(io.BytesIO(content))
+            parts: List[str] = []
+            for idx, slide in enumerate(prs.slides, start=1):
+                parts.append(f"Slide {idx}:")
+                # Extract text from all shapes
+                for shape in slide.shapes:
+                    # Text frames
+                    if getattr(shape, "has_text_frame", False):
+                        text_runs: List[str] = []
+                        for paragraph in shape.text_frame.paragraphs:
+                            run_text = "".join(run.text for run in paragraph.runs) or paragraph.text
+                            if run_text and run_text.strip():
+                                text_runs.append(run_text.strip())
+                        if text_runs:
+                            parts.append(" ".join(text_runs))
+                    # Tables
+                    if getattr(shape, "has_table", False):
+                        table = shape.table
+                        for row in table.rows:
+                            cells = [cell.text.strip() if cell.text else "" for cell in row.cells]
+                            if any(cells):
+                                parts.append(" | ".join(cells))
+                # Notes (if present)
+                try:
+                    if slide.has_notes_slide and slide.notes_slide and slide.notes_slide.notes_text_frame:
+                        notes_text = []
+                        for p in slide.notes_slide.notes_text_frame.paragraphs:
+                            t = "".join(r.text for r in p.runs) or p.text
+                            if t and t.strip():
+                                notes_text.append(t.strip())
+                        if notes_text:
+                            parts.append("Notes: " + " ".join(notes_text))
+                except Exception:
+                    pass
+                parts.append("")
+            return "\n".join(parts)
+        except Exception as e:
+            logger.error(f"Error extracting PPTX text: {str(e)}")
+            return ""
+
     def _extract_extension_from_source(self, source: str) -> str:
         """Extract a safe file extension from a URL or file path, ignoring query params."""
         try:
@@ -286,6 +366,8 @@ class DocumentProcessor:
             return {"extension": ext_lower, "category": "docx"}
         if ext_lower in {".txt"}:
             return {"extension": ext_lower, "category": "text"}
+        if ext_lower in {".pptx", ".ppt"}:
+            return {"extension": ext_lower, "category": "pptx"}
         if ext_lower in self.image_extensions:
             return {"extension": ext_lower, "category": "image"}
         if ext_lower in self.archive_extensions:

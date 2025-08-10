@@ -15,3 +15,5 @@ passlib[bcrypt]
 numpy
 psutil
 python-dotenv
+openpyxl
+python-pptx
