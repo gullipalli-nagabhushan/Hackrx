@@ -254,7 +254,7 @@ async def _generate_answer_instant(question: str, document_url: str) -> str:
         embedding = await query_engine.generate_query_embedding(question)
         
         # Perform enhanced similarity search with instant caching
-        relevant_chunks = await vector_store.similarity_search(embedding, top_k=10, query_text=question, document_url=document_url)  # Enhanced search with document caching
+        relevant_chunks = await vector_store.similarity_search(embedding, top_k=8, query_text=question, document_url=document_url)  # Enhanced search with document caching
         
         # Prepare context from relevant chunks (use multiple chunks for maximum context coverage)
         context = ""
