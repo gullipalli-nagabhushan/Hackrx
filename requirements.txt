@@ -1,0 +1,21 @@
+fastapi
+uvicorn[standard]
+pydantic
+openai>=1.0.0  # For embeddings
+pinecone
+asyncpg
+PyPDF2
+python-docx
+aiohttp
+langchain
+tiktoken
+python-multipart
+python-jose[cryptography]
+passlib[bcrypt]
+numpy
+psutil
+python-dotenv
+requests
+# Added dependencies for ChatGPT + Llama70B
+groq
+anthropic

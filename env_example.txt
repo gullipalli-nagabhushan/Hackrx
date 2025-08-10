@@ -1,0 +1,47 @@
+# Database Configuration
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=postgres
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=password
+
+# Vector Store Configuration
+PINECONE_API_KEY=your_pinecone_api_key_here
+PINECONE_INDEX_NAME=document-retrieval-index
+PINECONE_DIMENSION=1536
+
+# OpenAI Configuration (for embeddings)
+OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_EMBEDDING_MODEL=text-embedding-ada-002
+
+# Groq Configuration (for Llama70B LLM)
+GROQ_API_KEY=your_groq_api_key_here
+GROQ_API_BASE=https://api.groq.com
+GROQ_MODEL=llama3-70b-8192
+
+# Application Configuration
+APP_HOST=0.0.0.0
+APP_PORT=8000
+LOG_LEVEL=info
+
+# Performance Configuration
+MAX_WORKERS=16
+BATCH_SIZE=25
+CACHE_SIZE=10000
+TIMEOUT_SECONDS=5
+
+# Ultra-fast Configuration
+ULTRA_FAST_MODE=true
+ULTRA_FAST_CACHE_SIZE=50000
+ULTRA_FAST_TIMEOUT=10
+ULTRA_FAST_MAX_TOKENS=200
+ULTRA_FAST_TOP_K=15
+
+# Security
+AUTH_TOKEN=6fb28b9fc3ce5773b0e195ad0784e3aee7d4de28b6391648242fa9932f2693d0
+
+# Optimization Flags
+ENABLE_CACHING=true
+ENABLE_PARALLEL_PROCESSING=true
+ENABLE_BATCH_PROCESSING=true
+ENABLE_ULTRA_FAST_MODE=true
