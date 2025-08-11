@@ -108,7 +108,7 @@ class QueryEngine:
             for i, chunk in enumerate(relevant_chunks[:15]):  # Use up to 15 chunks for better coverage
                 context += f"{chunk['content']}\n\n"
             
-            print(context)
+            # print(context)
             if not context.strip():
                 context = "No relevant information found in the documents."
             # Enhanced prompt template with document URL for 100% accuracy and clean answers
@@ -124,17 +124,18 @@ CRITICAL INSTRUCTIONS:
 1. Answer based on the document content above and don't use otherthan that 
 2. MAXIMUM 2 sentences - this is STRICTLY enforced
 3. Be extremely concise and direct
-4. ALWAYS provide an answer based on the document sections if any relevant information exists
+4. ALWAYS provide an answer based on the document content if any relevant information exists
 5. Provide clean, professional answers like: "A grace period of thirty days is provided for premium payment after the due date to renew or continue the policy without losing continuity benefits."
 6. IMPORTANT: Keep answers under 300 characters and maximum 2 sentences
-7. Do not use your own knowledge to answer the question, only use the document content and the document url"""
+7. Use your own intelligence to answer the question if you think it is relevant, only use the document content and the document url"""
 
             response = await self.openai_client.chat.completions.create(
                 model="gpt-4o",
+
                 messages=[
                     {
                         "role": "system", 
-                        "content": "You are a specialized document analysis assistant. Your role is to provide accurate, document-specific answers based on the provided document sections. CRITICAL: Keep answers to MAXIMUM 2 sentences and under 300 characters - this is STRICTLY enforced. ALWAYS use the information from the document sections to answer questions when relevant information exists. Provide clean, concise, professional answers. IMPORTANT: Be extremely concise while maintaining accuracy and using available document information."
+                        "content": "You are a specialized document analysis assistant. Your role is to provide accurate, document-specific answers based on the provided document. CRITICAL: Keep answers to MAXIMUM 2 sentences and under 300 characters - this is STRICTLY enforced. ALWAYS use the information from the document  to answer questions when relevant information exists. Provide clean, concise, professional answers. IMPORTANT: Be extremely concise while maintaining accuracy and using available document information."
                     },
                     {
                         "role": "user", 
